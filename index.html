@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<!--
+   ______                            __
+  / ____/___  ____ ___  ____  __  __/ /____  _____
+ / /   / __ \/ __ `__ \/ __ \/ / / / __/ _ \/ ___/
+/ /___/ /_/ / / / / / / /_/ / /_/ / /_/  __/ /
+\____/\____/_/ /_/ /_/ .___/\__,_/\__/\___/_/
+                    /_/
+        Created with Perplexity Computer
+        https://www.perplexity.ai/computer
+-->
+<meta name="generator" content="Perplexity Computer">
+<meta name="author" content="Perplexity Computer">
+<meta property="og:see_also" content="https://www.perplexity.ai/computer">
+<link rel="author" href="https://www.perplexity.ai/computer">
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SoHo ↔ NJ — Trip Planner</title>
+<link href="https://api.fontshare.com/v2/css?f[]=general-sans@400,500,600,700&f[]=cabinet-grotesk@700,800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./base.css">
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<div class="app-shell">
+  <header class="header">
+    <div class="header-inner">
+      <div class="logo">
+        <svg width="28" height="28" viewBox="0 0 32 32" fill="none" aria-label="SoHo to NJ Trip Planner">
+          <circle cx="16" cy="16" r="14" stroke="currentColor" stroke-width="2"/>
+          <path d="M10 16h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="10" cy="16" r="2.5" fill="var(--color-primary)"/>
+          <circle cx="22" cy="16" r="2.5" fill="var(--color-accent)"/>
+          <path d="M19 13l3 3-3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="logo-text">SoHo <span class="logo-arrow">&rarr;</span> NJ</span>
+      </div>
+      <div class="header-right">
+        <span class="origin-label">From 543 Broadway</span>
+        <button data-theme-toggle aria-label="Switch to dark mode">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="main">
+    <!-- Mode Tabs -->
+    <nav class="mode-tabs">
+      <button class="mode-tab active" data-tab="go">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        Go to NJ
+      </button>
+      <button class="mode-tab" data-tab="return">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        Return to SoHo
+      </button>
+    </nav>
+
+    <!-- ============ GO TAB ============ -->
+    <div class="tab-panel" id="tab-go">
+      <section class="controls">
+        <div class="control-group dest-group">
+          <label class="control-label" for="destination-input">Where in NJ?</label>
+          <div class="input-wrap">
+            <svg class="input-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+            <input type="text" id="destination-input" class="text-input" placeholder="Address, city, or place in NJ..." autocomplete="off" spellcheck="false">
+            <button class="clear-btn" id="clear-btn" hidden aria-label="Clear">&times;</button>
+          </div>
+          <ul class="autocomplete-list" id="autocomplete-list" hidden></ul>
+          <span class="control-hint" id="dest-hint"></span>
+        </div>
+
+        <div class="control-group time-group">
+          <label class="control-label">Arrive by</label>
+          <div class="time-row">
+            <div class="input-wrap date-wrap">
+              <input type="date" id="travel-date" class="text-input date-input">
+            </div>
+            <div class="input-wrap time-wrap">
+              <input type="time" id="arrival-time" class="text-input time-input" value="09:00">
+            </div>
+          </div>
+          <div class="date-service-note" id="date-note"></div>
+          <div class="time-presets" id="time-presets"></div>
+        </div>
+      </section>
+
+      <!-- Results -->
+      <section class="results" id="results">
+        <div class="empty-state" id="empty-state">
+          <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-faint)" stroke-width="1.5">
+            <path d="M12 22s-8-4.5-8-11.8A8 8 0 0 1 12 2a8 8 0 0 1 8 8.2c0 7.3-8 11.8-8 11.8z"/>
+            <circle cx="12" cy="10" r="3"/>
+          </svg>
+          <p>Type a New Jersey destination to plan your trip</p>
+        </div>
+        <div id="results-content" hidden>
+          <div class="results-header">
+            <h2 class="results-title" id="results-title"></h2>
+            <p class="results-subtitle" id="results-subtitle"></p>
+          </div>
+          <div class="cards-grid" id="cards-grid"></div>
+        </div>
+      </section>
+
+      <!-- Detail Panel -->
+      <section class="detail-panel" id="detail-panel" hidden>
+        <button class="back-btn" id="back-btn">&larr; Back to comparison</button>
+        <div id="detail-content"></div>
+      </section>
+    </div>
+
+    <!-- ============ RETURN TAB ============ -->
+    <div class="tab-panel" id="tab-return" hidden>
+      <section class="controls">
+        <div class="control-group dest-group">
+          <label class="control-label" for="return-dest-input">Where in NJ are you?</label>
+          <div class="input-wrap">
+            <svg class="input-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+            <input type="text" id="return-dest-input" class="text-input" placeholder="Restaurant, address, or place in NJ..." autocomplete="off" spellcheck="false">
+            <button class="clear-btn" id="return-clear-btn" hidden aria-label="Clear">&times;</button>
+          </div>
+          <ul class="autocomplete-list" id="return-autocomplete-list" hidden></ul>
+          <span class="control-hint" id="return-dest-hint"></span>
+        </div>
+
+        <div class="control-group time-group">
+          <label class="control-label">When &amp; how long?</label>
+          <div class="time-row">
+            <div class="input-wrap date-wrap">
+              <input type="date" id="return-date" class="text-input date-input">
+            </div>
+            <div class="input-wrap time-wrap">
+              <input type="time" id="dinner-start" class="text-input time-input" value="18:30">
+            </div>
+          </div>
+          <div class="time-row" style="margin-top:var(--space-2)">
+            <div class="input-wrap">
+              <label class="inline-label">Duration</label>
+              <input type="text" id="dinner-duration" class="text-input duration-input" value="1h 30m" placeholder="e.g. 90m, 1h30m, 2h" autocomplete="off" spellcheck="false">
+            </div>
+          </div>
+          <div class="date-service-note" id="return-date-note"></div>
+        </div>
+      </section>
+
+      <!-- Return Results -->
+      <section class="results" id="return-results">
+        <div class="empty-state" id="return-empty-state">
+          <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-faint)" stroke-width="1.5">
+            <path d="M3 12h18M9 6l-6 6 6 6"/>
+          </svg>
+          <p>Enter your NJ location and dinner plans to see return options</p>
+        </div>
+        <div id="return-results-content" hidden></div>
+      </section>
+    </div>
+
+    <!-- Info -->
+    <section class="notes-section">
+      <h2 class="section-title">How estimates work</h2>
+      <div class="notes-grid">
+        <div class="note-card">
+          <div class="note-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+          </div>
+          <h3>Arrival-Based</h3>
+          <p>Estimates work backwards from your arrival time. The mode that lets you leave latest gives you the most flexibility. Rush hour (7-10am, 4-7pm weekdays) adds 30-60% to Lyft times.</p>
+        </div>
+        <div class="note-card">
+          <div class="note-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+          </div>
+          <h3>Lyft Pricing</h3>
+          <p>Calibrated from 24 actual Lyft receipts (2024–2026). EWR airport fees stripped before modeling. Rates include tolls, surcharges, and platform fees. Rush hour may add surge pricing.</p>
+        </div>
+        <div class="note-card">
+          <div class="note-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="8" width="20" height="12" rx="2"/><path d="M6 8V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2"/></svg>
+          </div>
+          <h3>Transit Options</h3>
+          <p>PATH: $3 flat, walk to WTC (~15 min). NJ Transit: date-specific GTFS schedule data (5,723 trains, 94 stations, Mar 10 – Sep 5 2026) with zone-based fares. Accounts for service changes, cutover schedules, and special service days.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>Estimates are approximate. Always verify real-time pricing and schedules before traveling.</p>
+    <a href="https://www.perplexity.ai/computer" target="_blank" rel="noopener noreferrer">Created with Perplexity Computer</a>
+  </footer>
+</div>
+<script src="./nj-data.js"></script>
+<script src="./njt-schedule.js"></script>
+<script src="./njt-return-schedule.js"></script>
+<script src="./app.js"></script>
+</body>
+</html>
