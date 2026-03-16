@@ -800,11 +800,85 @@ function showDetail(r, all, dest, arrTime) {
     <div class="detail-block" style="margin-top:var(--space-6)">
       <h3>By arrival time (${fmtDateLabel(curDate)})</h3>
       <table class="cost-table tod-table"><thead><tr><th>Arrive</th><th>Leave by</th><th>Duration</th><th>Cost</th></tr></thead><tbody>${todRows}</tbody></table>
-    </div>`;
+    </div>
+    ${renderCalendarSection(r, curDate, arrTime)}`;
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 $("back-btn").addEventListener("click", () => { detailPanel.hidden = true; $("results").hidden = false; });
+
+// ---- Google Calendar integration ----
+function gcalDateFmt(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}${pad(date.getMonth()+1)}${pad(date.getDate())}T${pad(date.getHours())}${pad(date.getMinutes())}00`;
+}
+
+function buildCalendarLinks(route, dateStr, arrTimeStr) {
+  const y = +dateStr.slice(0,4), mo = +dateStr.slice(4,6)-1, da = +dateStr.slice(6,8);
+  const [dh, dm] = route.departTime.split(':').map(Number);
+  let cursor = new Date(y, mo, da, dh, dm, 0);
+  const links = [];
+  const LE = { walk: '\ud83d\udeb6', drive: '\ud83d\ude97', wait: '\u23f3', train: '\ud83d\ude86', bus: '\ud83d\ude8c' };
+
+  for (const leg of route.legs) {
+    const start = new Date(cursor);
+    const end = new Date(cursor.getTime() + leg.minutes * 60000);
+    const emoji = LE[leg.type] || '\ud83d\udccd';
+    const title = `${emoji} ${leg.label}`;
+    const desc = [leg.detail, `${leg.minutes} min`, `Part of: ${route.label}`].filter(Boolean).join('\n');
+    const params = new URLSearchParams({ action: 'TEMPLATE', text: title, dates: `${gcalDateFmt(start)}/${gcalDateFmt(end)}`, details: desc });
+    links.push({
+      label: leg.label, emoji, minutes: leg.minutes,
+      startFmt: fmt12(minToHHMM(start.getHours() * 60 + start.getMinutes())),
+      url: `https://calendar.google.com/calendar/render?${params.toString()}`
+    });
+    cursor = end;
+  }
+
+  // All-in-one event
+  const tripStart = new Date(y, mo, da, dh, dm, 0);
+  const [ah, am] = arrTimeStr.split(':').map(Number);
+  const tripEnd = new Date(y, mo, da, ah, am, 0);
+  const allDesc = route.legs.map(l => `${LE[l.type]||''} ${l.label} (${l.minutes}m)`).join('\n');
+  const allParams = new URLSearchParams({ action: 'TEMPLATE', text: `Travel: ${route.label}`, dates: `${gcalDateFmt(tripStart)}/${gcalDateFmt(tripEnd)}`, details: `${route.label}\n${fmtCost(route.cost)}\n\n${allDesc}` });
+
+  return { legs: links, allInOneUrl: `https://calendar.google.com/calendar/render?${allParams.toString()}` };
+}
+
+function renderCalendarSection(route, dateStr, arrTimeStr) {
+  const cal = buildCalendarLinks(route, dateStr, arrTimeStr);
+  let html = `
+    <div class="detail-block cal-block" style="margin-top:var(--space-6)">
+      <h3>Add to Google Calendar</h3>
+      <p class="detail-note" style="margin-bottom:var(--space-3)">Each leg as a separate event, or the whole trip as one.</p>
+      <div class="cal-buttons">
+        <a href="${cal.allInOneUrl}" target="_blank" rel="noopener" class="cal-btn cal-btn-all">
+          <span class="cal-btn-icon">\ud83d\uddfa\ufe0f</span>
+          <span class="cal-btn-text"><strong>Entire trip</strong><span class="cal-btn-sub">${route.legs.length} legs · ${fmtMin(route.totalMin)}</span></span>
+        </a>`;
+  for (const leg of cal.legs) {
+    html += `
+        <a href="${leg.url}" target="_blank" rel="noopener" class="cal-btn">
+          <span class="cal-btn-icon">${leg.emoji}</span>
+          <span class="cal-btn-text"><strong>${leg.label}</strong><span class="cal-btn-sub">${leg.startFmt} · ${leg.minutes}m</span></span>
+        </a>`;
+  }
+  html += '</div></div>';
+  return html;
+}
+
+// Build a Google Calendar URL for a return-tab route
+function returnCalUrl(dateStr, startMin, legs, label, costStr) {
+  const y = +dateStr.slice(0,4), mo = +dateStr.slice(4,6)-1, da = +dateStr.slice(6,8);
+  const sh = Math.floor(startMin / 60), sm = startMin % 60;
+  const tripStart = new Date(y, mo, da, sh, sm, 0);
+  const totalLegMin = legs.reduce((s, l) => s + l.minutes, 0);
+  const tripEnd = new Date(tripStart.getTime() + totalLegMin * 60000);
+  const LE = { walk: '\ud83d\udeb6', drive: '\ud83d\ude97', wait: '\u23f3', train: '\ud83d\ude86', bus: '\ud83d\ude8c' };
+  const desc = legs.map(l => `${LE[l.type]||''} ${l.label} (${l.minutes}m)`).join('\n');
+  const params = new URLSearchParams({ action: 'TEMPLATE', text: `Return: ${label}`, dates: `${gcalDateFmt(tripStart)}/${gcalDateFmt(tripEnd)}`, details: `${label}\n${costStr}\n\n${desc}` });
+  return `https://calendar.google.com/calendar/render?${params.toString()}`;
+}
 
 // ---- Date helpers for UI ----
 // Convert date input value (YYYY-MM-DD) to YYYYMMDD for calendar lookup
@@ -1315,7 +1389,10 @@ function renderReturn(results, place, dateStr, dinnerStartMin, durationMin) {
         <div class="card-legs">
           ${ld.legs.map(l => `<div class="leg-row"><span class="leg-icon">${LEG_ICONS[l.type]}</span><span class="leg-text">${l.label}</span><span class="leg-time">${l.minutes}m</span></div>`).join('')}
         </div>
-        <div class="card-footer"><div class="traffic-indicator"><span class="traffic-dot ${ld.traffic.level}"></span><span>${ld.traffic.label} · Leave whenever</span></div></div>
+        <div class="card-footer">
+          <div class="traffic-indicator"><span class="traffic-dot ${ld.traffic.level}"></span><span>${ld.traffic.label} · Leave whenever</span></div>
+          <a href="${returnCalUrl(dateStr, earliestLeave, ld.legs, 'Lyft Door-to-Door', fmtCost(ld.cost))}" target="_blank" rel="noopener" class="cal-link">\ud83d\udcc5 Add to Calendar</a>
+        </div>
       </div>`;
 
     // PATH card
@@ -1330,7 +1407,10 @@ function renderReturn(results, place, dateStr, dinnerStartMin, durationMin) {
           <div class="card-legs">
             ${pr.legs.map(l => `<div class="leg-row"><span class="leg-icon">${LEG_ICONS[l.type]}</span><span class="leg-text">${l.label}</span><span class="leg-time">${l.minutes}m</span></div>`).join('')}
           </div>
-          <div class="card-footer"><div class="traffic-indicator"><span class="traffic-dot low"></span><span>Fixed schedule · Semi-flexible</span></div></div>
+          <div class="card-footer">
+            <div class="traffic-indicator"><span class="traffic-dot low"></span><span>Fixed schedule · Semi-flexible</span></div>
+            <a href="${returnCalUrl(dateStr, earliestLeave, pr.legs, 'Lyft + PATH', fmtCost(pr.cost))}" target="_blank" rel="noopener" class="cal-link">\ud83d\udcc5 Add to Calendar</a>
+          </div>
         </div>`;
     }
 
@@ -1348,7 +1428,10 @@ function renderReturn(results, place, dateStr, dinnerStartMin, durationMin) {
           <div class="leg-row"><span class="leg-icon">${LEG_ICONS.train}</span><span class="leg-text">${bestTrain.route} to Penn Station</span><span class="leg-time">${bestTrain.rideMin}m</span></div>
           <div class="leg-row"><span class="leg-icon">${LEG_ICONS.train}</span><span class="leg-text">Subway to SoHo</span><span class="leg-time">15m</span></div>
         </div>
-        <div class="card-footer"><div class="traffic-indicator"><span class="traffic-dot low"></span><span>Catch ${fmt12(minToHHMM(bestTrain.departMin))} · Must leave by ${fmt12(minToHHMM(bestTrain.mustLeaveBy))}</span></div></div>
+        <div class="card-footer">
+          <div class="traffic-indicator"><span class="traffic-dot low"></span><span>Catch ${fmt12(minToHHMM(bestTrain.departMin))} · Must leave by ${fmt12(minToHHMM(bestTrain.mustLeaveBy))}</span></div>
+          <a href="${returnCalUrl(dateStr, bestTrain.mustLeaveBy, [{type:'walk',label:(bestTrain.walkDist>0.45?'Lyft':'Walk')+' to '+bestTrain.station,minutes:bestTrain.getToStationMin},{type:'train',label:bestTrain.route+' to Penn Station',minutes:bestTrain.rideMin},{type:'train',label:'Subway to SoHo',minutes:15}], 'NJ Transit', '$'+Math.round(bestTrain.cost))}" target="_blank" rel="noopener" class="cal-link">\ud83d\udcc5 Add to Calendar</a>
+        </div>
       </div>`;
 
     html += '</div>';

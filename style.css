@@ -321,6 +321,20 @@
 .no-trains-msg p { margin-bottom: var(--space-2); }
 
 /* ---- Responsive ---- */
+/* ---- Calendar buttons ---- */
+.cal-buttons { display: flex; flex-direction: column; gap: var(--space-2); }
+.cal-btn { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); border-radius: var(--radius-lg); border: 1px solid var(--color-border); background: var(--color-surface); text-decoration: none; color: var(--color-text); transition: border-color 0.15s, background 0.15s; cursor: pointer; }
+.cal-btn:hover { border-color: var(--color-primary); background: var(--color-primary-light); }
+.cal-btn-all { border-color: var(--color-primary); background: var(--color-primary-light); }
+.cal-btn-all:hover { background: var(--color-primary); color: #fff; }
+.cal-btn-icon { font-size: var(--text-lg); flex-shrink: 0; width: 28px; text-align: center; }
+.cal-btn-text { display: flex; flex-direction: column; }
+.cal-btn-text strong { font-size: var(--text-sm); }
+.cal-btn-sub { font-size: var(--text-xs); color: var(--color-text-muted); }
+.cal-btn:hover .cal-btn-sub { color: inherit; }
+.cal-link { display: inline-block; margin-top: var(--space-2); font-size: var(--text-xs); color: var(--color-primary); text-decoration: none; font-weight: 500; }
+.cal-link:hover { text-decoration: underline; }
+
 @media (max-width: 768px) {
   .main { padding: var(--space-4); }
   .controls { grid-template-columns: 1fr; }
