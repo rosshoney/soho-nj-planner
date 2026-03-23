@@ -79,8 +79,9 @@ function fmtCPM(cpm) {
 //
 // Regression results (OLS on actual receipt core fares):
 //   NYC→NJ:   $1.45/mi + $1.11/min + $21.87 fixed  (R²=0.95, n=9)
-//   NJ→NYC:   $1.48/mi + $0.33/min + $23.09 fixed  (R²=0.95, n=12)
-//   Intra-NJ: $3.80/mi + $-1.10/min + $10.14 fixed  (R²=1.00, n=3)
+//   NJ→NYC:   $1.48/mi + $0.33/min + $23.09 fixed  (R²=0.95, n=13)
+//   Intra-NJ: $3.80/mi + $-1.10/min + $10.14 fixed  (R²=1.00, n=5)
+//   Minimum fare floor: $10 (raised from $8 based on short-ride actuals)
 //
 // rideType: "nyc_to_nj" | "nj_to_nyc" | "intra_nj"
 // Tip: 15% on pre-tip fare (user preference)
@@ -97,7 +98,7 @@ function lyftEst(miles, tMult, sMult, rideType) {
     perMile = 3.80; perMin = -1.10; fixed = 10.14;
   }
   // Core fare from regression
-  const coreFare = Math.max(8, perMile * miles + perMin * min + fixed);
+  const coreFare = Math.max(10, perMile * miles + perMin * min + fixed);
   // Apply surge (demand multiplier) — only affects variable portion
   const surged = coreFare * sMult;
   // Variance: ±8% normal, ±12% during surge
