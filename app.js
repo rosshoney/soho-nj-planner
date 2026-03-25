@@ -1274,6 +1274,51 @@ function buildReturnRoutes(place, dateStr, earliestLeaveMin) {
 }
 
 // ---- Render return results ----
+function retCpmTag(costMid, totalMin, cheapestCost, cheapestMin) {
+  if (costMid <= cheapestCost && totalMin <= cheapestMin) return { label: 'Best value', cls: 'free' };
+  const extraCost = costMid - cheapestCost;
+  const minSaved = cheapestMin - totalMin;
+  if (minSaved <= 0) return { label: 'Slower & pricier', cls: 'worse' };
+  const cpm = extraCost / minSaved;
+  if (cpm <= 0) return { label: `Saves ${minSaved} min free`, cls: 'free' };
+  if (cpm <= 3) return { label: `$${cpm.toFixed(2)}/min saved`, cls: 'good' };
+  if (cpm <= 8) return { label: `$${cpm.toFixed(2)}/min saved`, cls: 'moderate' };
+  return { label: `$${cpm.toFixed(2)}/min saved`, cls: 'expensive' };
+}
+
+function retBuildCalendarSection(legs, dateStr, startMin, label, costStr) {
+  const LE = { walk: '\ud83d\udeb6', drive: '\ud83d\ude97', wait: '\u23f3', train: '\ud83d\ude86', bus: '\ud83d\ude8c' };
+  const y = +dateStr.slice(0,4), mo = +dateStr.slice(4,6)-1, da = +dateStr.slice(6,8);
+  let cursor = new Date(y, mo, da, Math.floor(startMin/60), startMin%60, 0);
+  const totalLegMin = legs.reduce((s,l) => s + l.minutes, 0);
+  const tripEnd = new Date(cursor.getTime() + totalLegMin * 60000);
+  // Individual legs
+  const legLinks = [];
+  const cursorCopy = new Date(cursor);
+  for (const leg of legs) {
+    const start = new Date(cursorCopy);
+    const end = new Date(cursorCopy.getTime() + leg.minutes * 60000);
+    const emoji = LE[leg.type] || '\ud83d\udccd';
+    const title = `${emoji} ${leg.label}`;
+    const desc = [leg.detail, `${leg.minutes} min`, `Part of: ${label}`].filter(Boolean).join('\n');
+    const params = new URLSearchParams({ action: 'TEMPLATE', text: title, dates: `${gcalDateFmt(start)}/${gcalDateFmt(end)}`, details: desc });
+    legLinks.push({ label: leg.label, emoji, minutes: leg.minutes, startFmt: fmt12(minToHHMM(start.getHours()*60+start.getMinutes())), url: `https://calendar.google.com/calendar/render?${params.toString()}` });
+    cursorCopy.setTime(end.getTime());
+  }
+  // All-in-one
+  const allDesc = legs.map(l => `${LE[l.type]||''} ${l.label} (${l.minutes}m)`).join('\n');
+  const allParams = new URLSearchParams({ action: 'TEMPLATE', text: `Return: ${label}`, dates: `${gcalDateFmt(cursor)}/${gcalDateFmt(tripEnd)}`, details: `${label}\n${costStr}\n\n${allDesc}` });
+  const allUrl = `https://calendar.google.com/calendar/render?${allParams.toString()}`;
+
+  let html = `<div class="ret-cal-section"><div class="ret-cal-label">Add to Google Calendar</div><div class="cal-buttons">`;
+  html += `<a href="${allUrl}" target="_blank" rel="noopener" class="cal-btn cal-btn-all"><span class="cal-btn-icon">\ud83d\uddfa\ufe0f</span><span class="cal-btn-text"><strong>Entire trip</strong><span class="cal-btn-sub">${legs.length} legs · ${fmtMin(totalLegMin)}</span></span></a>`;
+  for (const l of legLinks) {
+    html += `<a href="${l.url}" target="_blank" rel="noopener" class="cal-btn"><span class="cal-btn-icon">${l.emoji}</span><span class="cal-btn-text"><strong>${l.label}</strong><span class="cal-btn-sub">${l.startFmt} · ${l.minutes}m</span></span></a>`;
+  }
+  html += '</div></div>';
+  return html;
+}
+
 function renderReturn(results, place, dateStr, dinnerStartMin, durationMin) {
   retEmptyState.hidden = true;
   retResultsContent.hidden = false;
@@ -1281,14 +1326,23 @@ function renderReturn(results, place, dateStr, dinnerStartMin, durationMin) {
   const dateLabel = fmtDateLabel(dateStr);
   const dinnerEndFmt = fmt12(minToHHMM(earliestLeave));
 
-  // Lyft direct info
   const ld = results.lyftDirect;
   const ldArrFmt = fmt12(minToHHMM(ld.arriveHomeMin));
-
-  // PATH info
   const pr = results.pathRoute;
 
+  // Determine cheapest option across all modes for $/min calculation
+  const allCosts = [{ cost: ld.cost.mid, min: ld.totalMin }];
+  if (pr) allCosts.push({ cost: pr.cost.mid || pr.cost, min: pr.totalMin });
+  if (results.departures.length) {
+    const cheapTrain = results.departures.reduce((a,b) => a.cost < b.cost ? a : b);
+    allCosts.push({ cost: cheapTrain.cost, min: cheapTrain.totalMin });
+  }
+  const cheapestCost = Math.min(...allCosts.map(a => a.cost));
+  const cheapestForCost = allCosts.find(a => a.cost === cheapestCost);
+  const cheapestMin = cheapestForCost.min;
+
   // Summary cards
+  const ldCpm = retCpmTag(ld.cost.mid, ld.totalMin, cheapestCost, cheapestMin);
   let html = `
     <div class="return-header">
       <h2>Getting home from ${place.name}</h2>
@@ -1331,16 +1385,15 @@ function renderReturn(results, place, dateStr, dinnerStartMin, durationMin) {
   }
   html += '</div>';
 
-  // Find first feasible train (used in both table and comparison)
   const firstGood = results.departures.length
     ? results.departures.findIndex(d => d.mustLeaveBy >= earliestLeave)
     : -1;
 
-  // NJT Departures table
+  // NJT Departures table with inline expandable details
   html += '<div class="departures-section">';
   if (results.departures.length) {
     html += `<h3>NJ Transit Departures to Penn Station</h3>`;
-    html += `<p class="section-note">Tell your date: "I need to wrap up by..." — the deadline column shows when you need to leave the restaurant.</p>`;
+    html += `<p class="section-note">Click a row to see full details, calendar links, and leg breakdown.</p>`;
     html += '<div class="departure-row departure-header"><span>Departs</span><span>Route</span><span>Home by</span><span>Leave by</span></div>';
 
     results.departures.forEach((d, i) => {
@@ -1349,15 +1402,48 @@ function renderReturn(results, place, dateStr, dinnerStartMin, durationMin) {
       const mustLeaveFmt = fmt12(minToHHMM(d.mustLeaveBy));
       const isHighlight = i === firstGood;
       const isPast = d.mustLeaveBy < earliestLeave;
+      const njtCpm = retCpmTag(d.cost, d.totalMin, cheapestCost, cheapestMin);
+
+      // Build legs for this train
+      const trainLegs = [
+        { type: d.walkDist > 0.45 ? 'drive' : 'walk', label: `${d.walkDist > 0.45 ? 'Lyft' : 'Walk'} to ${d.station}`, detail: `${d.walkDist.toFixed(1)} mi`, minutes: d.getToStationMin },
+        { type: 'train', label: `${d.route} to Penn Station`, detail: `${fmtMin(d.rideMin)} ride`, minutes: d.rideMin },
+        { type: 'train', label: 'Subway to SoHo', detail: 'To 543 Broadway', minutes: 15 }
+      ];
+      const calHtml = retBuildCalendarSection(trainLegs, dateStr, d.mustLeaveBy, `NJ Transit via ${d.station}`, `$${Math.round(d.cost)}`);
+
       html += `
-        <div class="departure-row${isHighlight ? ' highlight' : ''}${isPast ? ' past' : ''}">
+        <div class="departure-row clickable${isHighlight ? ' highlight' : ''}${isPast ? ' past' : ''}" data-ret-idx="${i}">
           <span class="depart-time-col">${departFmt}</span>
           <span class="depart-route-col">
             <span class="route-line">${d.route} → ${d.station}</span>
-            <span class="route-detail">${d.getToStation} · ${fmtMin(d.rideMin)} ride · $${Math.round(d.cost)}</span>
+            <span class="route-detail">${d.getToStation} · ${fmtMin(d.rideMin)} ride · $${Math.round(d.cost)} <span class="cpm-tag ${njtCpm.cls}">${njtCpm.label}</span></span>
           </span>
           <span class="depart-arrive-col">${arrHomeFmt}</span>
           <span class="depart-deadline-col">${mustLeaveFmt}</span>
+        </div>
+        <div class="departure-detail" id="ret-detail-${i}" hidden>
+          <div class="ret-detail-inner">
+            <div class="ret-detail-grid">
+              <div class="ret-detail-block">
+                <h4>Route legs</h4>
+                <div class="ret-timeline">
+                  ${trainLegs.map(l => `<div class="ret-tl-step"><span class="ret-tl-dot" data-type="${l.type}"></span><div class="ret-tl-content"><strong>${l.label}</strong><span>${l.detail} · ${l.minutes}m</span></div></div>`).join('')}
+                  <div class="ret-tl-step"><span class="ret-tl-dot" data-type="arrive"></span><div class="ret-tl-content"><strong>Home — 543 Broadway</strong><span>${arrHomeFmt}</span></div></div>
+                </div>
+              </div>
+              <div class="ret-detail-block">
+                <h4>Cost breakdown</h4>
+                <table class="cost-table">
+                  ${d.walkDist > 0.45 ? `<tr><td>Lyft to station</td><td class="cost-val">~$${Math.round(d.cost - (d.cost > 20 ? 18 : 3))}</td></tr>` : ''}
+                  <tr><td>NJ Transit fare</td><td class="cost-val">$${(d.cost - (d.walkDist > 0.45 ? Math.round(d.cost - 18) : 0) - 2.90).toFixed(0)}</td></tr>
+                  <tr><td>Subway</td><td class="cost-val">$2.90</td></tr>
+                  <tr class="total"><td>Total</td><td class="cost-val">$${Math.round(d.cost)}</td></tr>
+                </table>
+              </div>
+            </div>
+            ${calHtml}
+          </div>
         </div>`;
     });
   } else {
@@ -1368,18 +1454,16 @@ function renderReturn(results, place, dateStr, dinnerStartMin, durationMin) {
   }
   html += '</div>';
 
-  // Comparison: what does flexibility cost?
+  // Comparison cards with $/min saved and per-leg calendar
   if (results.departures.length && ld) {
-    const cheapestTrain = results.departures.reduce((a, b) => a.cost < b.cost ? a : b);
-    const lyftExtra = ld.cost.mid - cheapestTrain.cost;
-    const timeSaved = cheapestTrain.totalMin - ld.totalMin;
     html += `
       <div class="return-compare">
         <h3>Cost of flexibility</h3>
-        <p class="compare-note">Lyft lets you leave whenever — no train to catch. Here's what that flexibility costs compared to NJ Transit.</p>
+        <p class="compare-note">Lyft lets you leave whenever — no train to catch. Here's what that flexibility costs.</p>
         <div class="return-cards">`;
 
     // Lyft card
+    const ldCalHtml = retBuildCalendarSection(ld.legs, dateStr, earliestLeave, 'Lyft Door-to-Door', fmtCost(ld.cost));
     html += `
       <div class="mode-card" data-mode="lyft" style="cursor:default">
         <div class="card-header"><span class="card-mode-name">Lyft Door-to-Door</span></div>
@@ -1387,17 +1471,21 @@ function renderReturn(results, place, dateStr, dinnerStartMin, durationMin) {
           <div class="metric"><span class="metric-label">Cost</span><span class="metric-value">${fmtCost(ld.cost)}</span></div>
           <div class="metric"><span class="metric-label">Time</span><span class="metric-value">${fmtMin(ld.totalMin)}</span></div>
         </div>
+        <div class="card-cpm"><span class="cpm-tag ${ldCpm.cls}">${ldCpm.label}</span></div>
         <div class="card-legs">
           ${ld.legs.map(l => `<div class="leg-row"><span class="leg-icon">${LEG_ICONS[l.type]}</span><span class="leg-text">${l.label}</span><span class="leg-time">${l.minutes}m</span></div>`).join('')}
         </div>
         <div class="card-footer">
           <div class="traffic-indicator"><span class="traffic-dot ${ld.traffic.level}"></span><span>${ld.traffic.label} · Leave whenever</span></div>
-          <a href="${returnCalUrl(dateStr, earliestLeave, ld.legs, 'Lyft Door-to-Door', fmtCost(ld.cost))}" target="_blank" rel="noopener" class="cal-link">\ud83d\udcc5 Add to Calendar</a>
         </div>
+        ${ldCalHtml}
       </div>`;
 
     // PATH card
     if (pr) {
+      const prCostMid = typeof pr.cost === 'object' ? pr.cost.mid : pr.cost;
+      const prCpm = retCpmTag(prCostMid, pr.totalMin, cheapestCost, cheapestMin);
+      const prCalHtml = retBuildCalendarSection(pr.legs, dateStr, earliestLeave, 'Lyft + PATH', fmtCost(pr.cost));
       html += `
         <div class="mode-card" data-mode="path" style="cursor:default">
           <div class="card-header"><span class="card-mode-name">Lyft + PATH</span></div>
@@ -1405,18 +1493,26 @@ function renderReturn(results, place, dateStr, dinnerStartMin, durationMin) {
             <div class="metric"><span class="metric-label">Cost</span><span class="metric-value">${fmtCost(pr.cost)}</span></div>
             <div class="metric"><span class="metric-label">Time</span><span class="metric-value">${fmtMin(pr.totalMin)}</span></div>
           </div>
+          <div class="card-cpm"><span class="cpm-tag ${prCpm.cls}">${prCpm.label}</span></div>
           <div class="card-legs">
             ${pr.legs.map(l => `<div class="leg-row"><span class="leg-icon">${LEG_ICONS[l.type]}</span><span class="leg-text">${l.label}</span><span class="leg-time">${l.minutes}m</span></div>`).join('')}
           </div>
           <div class="card-footer">
             <div class="traffic-indicator"><span class="traffic-dot low"></span><span>Fixed schedule · Semi-flexible</span></div>
-            <a href="${returnCalUrl(dateStr, earliestLeave, pr.legs, 'Lyft + PATH', fmtCost(pr.cost))}" target="_blank" rel="noopener" class="cal-link">\ud83d\udcc5 Add to Calendar</a>
           </div>
+          ${prCalHtml}
         </div>`;
     }
 
     // Best NJT card
     const bestTrain = results.departures[firstGood >= 0 ? firstGood : 0];
+    const njtBestCpm = retCpmTag(bestTrain.cost, bestTrain.totalMin, cheapestCost, cheapestMin);
+    const njtLegs = [
+      { type: bestTrain.walkDist > 0.45 ? 'drive' : 'walk', label: `${bestTrain.walkDist > 0.45 ? 'Lyft' : 'Walk'} to ${bestTrain.station}`, detail: '', minutes: bestTrain.getToStationMin },
+      { type: 'train', label: `${bestTrain.route} to Penn Station`, detail: '', minutes: bestTrain.rideMin },
+      { type: 'train', label: 'Subway to SoHo', detail: '', minutes: 15 }
+    ];
+    const njtCalHtml = retBuildCalendarSection(njtLegs, dateStr, bestTrain.mustLeaveBy, `NJ Transit via ${bestTrain.station}`, `$${Math.round(bestTrain.cost)}`);
     html += `
       <div class="mode-card" data-mode="njtransit" style="cursor:default">
         <div class="card-header"><span class="card-mode-name">NJ Transit</span><span class="card-badge">Cheapest</span></div>
@@ -1424,30 +1520,40 @@ function renderReturn(results, place, dateStr, dinnerStartMin, durationMin) {
           <div class="metric"><span class="metric-label">Cost</span><span class="metric-value">$${Math.round(bestTrain.cost)}</span></div>
           <div class="metric"><span class="metric-label">Time</span><span class="metric-value">${fmtMin(bestTrain.totalMin)}</span></div>
         </div>
+        <div class="card-cpm"><span class="cpm-tag ${njtBestCpm.cls}">${njtBestCpm.label}</span></div>
         <div class="card-legs">
           <div class="leg-row"><span class="leg-icon">${LEG_ICONS.walk}</span><span class="leg-text">${bestTrain.walkDist > 0.45 ? 'Lyft' : 'Walk'} to ${bestTrain.station}</span><span class="leg-time">${bestTrain.getToStationMin}m</span></div>
           <div class="leg-row"><span class="leg-icon">${LEG_ICONS.train}</span><span class="leg-text">${bestTrain.route} to Penn Station</span><span class="leg-time">${bestTrain.rideMin}m</span></div>
           <div class="leg-row"><span class="leg-icon">${LEG_ICONS.train}</span><span class="leg-text">Subway to SoHo</span><span class="leg-time">15m</span></div>
         </div>
         <div class="card-footer">
-          <div class="traffic-indicator"><span class="traffic-dot low"></span><span>Catch ${fmt12(minToHHMM(bestTrain.departMin))} · Must leave by ${fmt12(minToHHMM(bestTrain.mustLeaveBy))}</span></div>
-          <a href="${returnCalUrl(dateStr, bestTrain.mustLeaveBy, [{type:'walk',label:(bestTrain.walkDist>0.45?'Lyft':'Walk')+' to '+bestTrain.station,minutes:bestTrain.getToStationMin},{type:'train',label:bestTrain.route+' to Penn Station',minutes:bestTrain.rideMin},{type:'train',label:'Subway to SoHo',minutes:15}], 'NJ Transit', '$'+Math.round(bestTrain.cost))}" target="_blank" rel="noopener" class="cal-link">\ud83d\udcc5 Add to Calendar</a>
+          <div class="traffic-indicator"><span class="traffic-dot low"></span><span>Catch ${fmt12(minToHHMM(bestTrain.departMin))} · Leave by ${fmt12(minToHHMM(bestTrain.mustLeaveBy))}</span></div>
         </div>
+        ${njtCalHtml}
       </div>`;
 
-    html += '</div>';
-
-    // Flexibility cost summary
-    if (lyftExtra > 0 && timeSaved > 0) {
-      const cpm = lyftExtra / timeSaved;
-      html += `<p class="compare-note" style="margin-top:var(--space-4)">Lyft costs <strong>$${Math.round(lyftExtra)} more</strong> than NJ Transit but saves <strong>${timeSaved} min</strong> and lets you skip the schedule. That's <strong>$${cpm.toFixed(2)}/min</strong> of flexibility.</p>`;
-    } else if (lyftExtra > 0) {
-      html += `<p class="compare-note" style="margin-top:var(--space-4)">Lyft costs <strong>$${Math.round(lyftExtra)} more</strong> than NJ Transit, but you can leave whenever you want.</p>`;
-    }
-    html += '</div>';
+    html += '</div></div>';
   }
 
   retResultsContent.innerHTML = html;
+
+  // Attach click handlers for expandable departure rows
+  retResultsContent.querySelectorAll('.departure-row.clickable').forEach(row => {
+    row.addEventListener('click', () => {
+      const idx = row.dataset.retIdx;
+      const detail = document.getElementById(`ret-detail-${idx}`);
+      const wasOpen = !detail.hidden;
+      // Close all
+      retResultsContent.querySelectorAll('.departure-detail').forEach(d => d.hidden = true);
+      retResultsContent.querySelectorAll('.departure-row.clickable').forEach(r => r.classList.remove('expanded'));
+      if (!wasOpen) {
+        detail.hidden = false;
+        row.classList.add('expanded');
+        // Smooth scroll the detail into view if needed
+        setTimeout(() => detail.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50);
+      }
+    });
+  });
 }
 
 // Helper reused
@@ -1518,10 +1624,38 @@ function updateReturn() {
 }
 
 retDateInput.addEventListener('change', () => { updateReturnDateNote(); updateReturn(); });
-dinnerStart.addEventListener('change', updateReturn);
-dinnerStart.addEventListener('input', updateReturn);
+dinnerStart.addEventListener('change', () => { highlightReturnPresets(); updateReturn(); });
+dinnerStart.addEventListener('input', () => { highlightReturnPresets(); updateReturn(); });
 dinnerDuration.addEventListener('change', updateReturn);
 dinnerDuration.addEventListener('input', updateReturn);
+
+// ---- Return time presets ----
+const retPresets = [
+  { label: '12 PM', v: '12:00' }, { label: '12:30', v: '12:30' },
+  { label: '5 PM', v: '17:00' }, { label: '6 PM', v: '18:00' },
+  { label: '6:30', v: '18:30' }, { label: '7 PM', v: '19:00' },
+  { label: '8 PM', v: '20:00' },
+];
+const retPresetsEl = $('return-time-presets');
+retPresets.forEach(p => {
+  const b = document.createElement('button');
+  b.className = 'preset-btn';
+  b.textContent = p.label;
+  b.dataset.val = p.v;
+  b.addEventListener('click', () => {
+    dinnerStart.value = p.v;
+    highlightReturnPresets();
+    updateReturn();
+  });
+  retPresetsEl.appendChild(b);
+});
+function highlightReturnPresets() {
+  const cur = dinnerStart.value;
+  retPresetsEl.querySelectorAll('.preset-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.val === cur);
+  });
+}
+highlightReturnPresets();
 
 // ---- Theme toggle ----
 (function () {
