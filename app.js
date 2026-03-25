@@ -146,11 +146,14 @@ function buildRoutes(dest, arrTime, dateStr) {
   const wd = isWeekdayFromDate(dateStr);
   const period = timePeriod(hour, wd);
   const tf = trafficInfo(period);
-  const pf = pathFreq(period);
   const routes = [];
   const WALK_THRESHOLD = 0.45; // miles — walk if last mile under this
 
-  // Get active service IDs for the selected date
+  // Convert arrival time to minutes since midnight (used by PATH and NJT sections)
+  const [arrH, arrM] = arrTime.split(":").map(Number);
+  const arrMin = arrH * 60 + arrM;
+
+  // Get active NJT service IDs for the selected date
   const activeServiceIds = NJT_CALENDAR[dateStr] || [];
   const svcSet = new Set(activeServiceIds);
 
@@ -201,32 +204,65 @@ function buildRoutes(dest, arrTime, dateStr) {
     });
   }
 
-  // ========== 2. SUBWAY → PATH → LAST MILE ==========
-  if (pf) {
-    // Try each PATH line + stop, score by blended time+cost to pick smartest exit
-    let bestRoute = null, bestScore = Infinity;
-    for (const [lineId, line] of Object.entries(PATH_LINES)) {
-      const conn = bestConnection(line.manhattanStation);
-      for (const stop of line.stops) {
-        const lm = lastMile(stop.lat, stop.lng, stop.name);
-        const avgWait = Math.round(pf / 2);
-        const total = conn.minutes + avgWait + stop.rideMin + lm.minutes;
+  // ========== 2. SUBWAY → PATH → LAST MILE (GTFS schedule) ==========
+  {
+    const pathSvcIds = PATH_CALENDAR[dateStr] || [];
+    const pathSvcSet = new Set(pathSvcIds);
+
+    // Manhattan station → connection key mapping
+    const pathConnMap = { W: "wtcPath", C: "christopherPath", "9": "christopherPath", "4": "path33", "2": "path33", "3": "path33" };
+
+    if (pathSvcIds.length > 0) {
+      // Find 5 nearest PATH NJ stations to destination
+      const pathStationEntries = Object.entries(PATH_SCHEDULE_STATIONS);
+      const nearestPath = pathStationEntries
+        .map(([sid, s]) => ({ sid, ...s, dist: haversine(dest.lat, dest.lng, s.lat, s.lng) }))
+        .sort((a, b) => a.dist - b.dist)
+        .slice(0, 5);
+
+      let bestRoute = null, latestDepart = -Infinity;
+      for (const stn of nearestPath) {
+        const lm = lastMile(stn.lat, stn.lng, stn.n);
+        const latestNJArrival = arrMin - lm.minutes;
+        // Find latest PATH train arriving at this NJ station on time
+        let bestTrain = null;
+        for (const t of PATH_OUTBOUND_TRAINS) {
+          if (!pathSvcSet.has(t[0])) continue;   // not running today
+          if (t[3] !== stn.sid) continue;         // wrong station
+          if (t[2] > latestNJArrival) continue;   // arrives too late
+          if (!bestTrain || t[2] > bestTrain[2]) bestTrain = t; // latest possible
+        }
+        if (!bestTrain) continue;
+
+        const [, pathDepart, pathArrive, , routeCode, manStation] = bestTrain;
+        const rideMin = pathArrive - pathDepart;
+        const connKey = pathConnMap[manStation];
+        const conn = bestConnection(connKey);
+        const waitAtPlatform = 3; // buffer
+        const leaveTime = pathDepart - conn.minutes - waitAtPlatform;
+        const actualTotal = arrMin - leaveTime;
         const transitCost = (conn.fare || 0) + PATH_FARE;
         const totalCostMid = transitCost + lm.cost.mid;
-        // Blended score: balance time and cost so it won't pick a
-        // close PATH stop that results in a $100+ Lyft
-        const score = total * 0.35 + totalCostMid * 0.65;
-        if (score < bestScore) {
-          bestScore = score;
+        const rd = roadMiles(stn.lat, stn.lng, dest.lat, dest.lng);
+
+        // Blended score: balance time and cost
+        const score = actualTotal * 0.35 + totalCostMid * 0.65;
+        // Also require latest departure from SoHo (most convenient) among similar scores
+        if (!bestRoute || score < latestDepart) {
+          latestDepart = score;
+          const pathDepartFmt = fmt12(minToHHMM(pathDepart));
+          const pathArriveFmt = fmt12(minToHHMM(pathArrive));
+          const manStationName = PATH_MANHATTAN_STATIONS[manStation]?.n || manStation;
+          const routeLabel = routeCode;
           bestRoute = {
-            id: "path-route", label: lm.dist > WALK_THRESHOLD ? `PATH + Lyft` : `PATH Train`,
-            mode: "path", departTime: subMin(arrTime, total), totalMin: total,
-            cost: { low: Math.round((transitCost + lm.cost.low) * 100) / 100, mid: Math.round((transitCost + lm.cost.mid) * 100) / 100, high: Math.round((transitCost + lm.cost.high) * 100) / 100 },
+            id: "path-route", label: rd > WALK_THRESHOLD ? "PATH + Lyft" : "PATH Train",
+            mode: "path", departTime: minToHHMM(leaveTime < 0 ? leaveTime + 1440 : leaveTime), totalMin: actualTotal,
+            cost: { low: Math.round((transitCost + lm.cost.low) * 100) / 100, mid: Math.round(totalCostMid * 100) / 100, high: Math.round((transitCost + lm.cost.high) * 100) / 100 },
             traffic: { level: "low", label: "Fixed schedule" },
             legs: [
               { type: conn.type === "subway" ? "train" : "walk", label: conn.label, detail: conn.trains || "From 543 Broadway", minutes: conn.minutes },
-              { type: "wait", label: `Wait for PATH (every ${pf} min)`, detail: "Platform", minutes: avgWait },
-              { type: "train", label: `PATH to ${stop.name}`, detail: `${lineId} · $${PATH_FARE.toFixed(2)}`, minutes: stop.rideMin },
+              { type: "wait", label: `Catch ${pathDepartFmt} PATH`, detail: `${routeLabel} line · ${manStationName}`, minutes: waitAtPlatform },
+              { type: "train", label: `PATH to ${stn.n}`, detail: `${routeLabel} · $${PATH_FARE.toFixed(2)}`, minutes: rideMin },
               ...lm.legs,
             ],
             breakdown: [
@@ -234,24 +270,21 @@ function buildRoutes(dest, arrTime, dateStr) {
               { label: "PATH fare", value: `$${PATH_FARE.toFixed(2)}` },
               ...lm.breakdown,
             ],
-            notes: `PATH every ${pf} min · Exit at ${stop.name} (${lm.dist.toFixed(1)} mi to dest)`,
-            available: true, _exitStation: stop.name, _lastMileDist: lm.dist,
+            notes: `PATH ${pathDepartFmt} ${manStationName} → ${pathArriveFmt} ${stn.n} (${routeLabel})`,
+            available: true, _exitStation: stn.n, _lastMileDist: rd, _line: routeLabel,
           };
         }
       }
+      routes.push(bestRoute || { id: "path-route", label: "PATH + Lyft", mode: "path", available: false, reason: "No PATH trains found for this time" });
+    } else {
+      routes.push({ id: "path-route", label: "PATH + Lyft", mode: "path", available: false, reason: "No PATH service scheduled for this date" });
     }
-    routes.push(bestRoute || { id: "path-route", label: "PATH + Lyft", mode: "path", available: false, reason: "No viable PATH route found" });
-  } else {
-    routes.push({ id: "path-route", label: "PATH + Lyft", mode: "path", available: false, reason: "PATH has reduced/no service at this hour" });
   }
 
   // ========== 3. SUBWAY → NJ TRANSIT → LAST MILE (GTFS schedule) ==========
   // ========== 4. NJ TRANSIT ONLY (walk from station, GTFS schedule) ==========
   {
     const conn = bestConnection("pennStation");
-    // Convert arrival time to minutes since midnight
-    const [arrH, arrM] = arrTime.split(":").map(Number);
-    const arrMin = arrH * 60 + arrM;
 
     // Find 5 nearest GTFS stations to destination
     const stationEntries = Object.entries(NJT_SCHEDULE_STATIONS);
@@ -259,13 +292,6 @@ function buildRoutes(dest, arrTime, dateStr) {
       .map(([sid, s]) => ({ sid, ...s, dist: haversine(dest.lat, dest.lng, s.lat, s.lon) }))
       .sort((a, b) => a.dist - b.dist)
       .slice(0, 5);
-
-    // Helper: format minutes-since-midnight to HH:MM (handles >24h for late trains)
-    function minToHHMM(m) {
-      const h = Math.floor(m / 60) % 24;
-      const mn = m % 60;
-      return `${String(h).padStart(2, "0")}:${String(mn).padStart(2, "0")}`;
-    }
 
     // Helper: find best train for a station with a given last-mile time
     function findBestTrain(sid, lastMileMin) {
@@ -1129,7 +1155,6 @@ function buildReturnRoutes(place, dateStr, earliestLeaveMin) {
   const hour = Math.floor(earliestLeaveMin / 60);
   const period = timePeriod(hour, wd);
   const tf = trafficInfo(period);
-  const pf = pathFreq(period);
   const activeServiceIds = NJT_CALENDAR[dateStr] || [];
   const svcSet = new Set(activeServiceIds);
 
@@ -1227,26 +1252,59 @@ function buildReturnRoutes(place, dateStr, earliestLeaveMin) {
     };
   }
 
-  // 3. LYFT → PATH → SoHo (drive to nearest PATH station, take PATH to NYC)
-  if (pf) {
-    let bestRoute = null, bestScore = Infinity;
-    for (const [lineId, line] of Object.entries(PATH_LINES)) {
-      for (const stop of line.stops) {
-        const rdToPath = roadMiles(place.lat, place.lng, stop.lat, stop.lng);
+  // 3. LYFT → PATH → SoHo (GTFS schedule-based)
+  {
+    const pathSvcIds = PATH_CALENDAR[dateStr] || [];
+    const pathSvcSet = new Set(pathSvcIds);
+    const pathConnMap = { W: 'wtcPath', C: 'christopherPath', '9': 'christopherPath', '4': 'path33', '2': 'path33', '3': 'path33' };
+    const pathConnLabels = {
+      wtcPath: s => s.replace('to WTC-Cortlandt','from WTC'),
+      christopherPath: s => s.replace('to Christopher','from Christopher'),
+      path33: s => s.replace('to 34th St-Penn','from 33rd St').replace('to 33rd St','from 33rd St'),
+    };
+
+    if (pathSvcIds.length > 0) {
+      // Find 5 nearest PATH NJ stations
+      const pathStationEntries = Object.entries(PATH_SCHEDULE_STATIONS);
+      const nearestPath = pathStationEntries
+        .map(([sid, s]) => ({ sid, ...s, dist: haversine(place.lat, place.lng, s.lat, s.lng) }))
+        .sort((a, b) => a.dist - b.dist)
+        .slice(0, 5);
+
+      let bestRoute = null, bestScore = Infinity;
+      for (const stn of nearestPath) {
+        const rdToPath = roadMiles(place.lat, place.lng, stn.lat, stn.lng);
         const dmToPath = driveMin(rdToPath, tf.mult);
         const waitLyft = 4;
-        const avgWait = Math.round(pf / 2);
-        // PATH ride time back to Manhattan (same as outbound, roughly)
-        const pathRide = stop.rideMin;
-        // Then walk/subway from PATH station to SoHo
-        const conn = bestConnection(line.manhattanStation);
+        // Earliest arrival at PATH station
+        const arriveAtStation = earliestLeaveMin + waitLyft + dmToPath;
+
+        // Find earliest PATH return train from this station after arrival
+        let bestTrain = null;
+        for (const t of PATH_RETURN_TRAINS) {
+          if (!pathSvcSet.has(t[0])) continue;
+          if (t[3] !== stn.sid) continue;
+          if (t[1] < arriveAtStation) continue; // departs before we arrive
+          if (!bestTrain || t[1] < bestTrain[1]) bestTrain = t; // earliest departure
+        }
+        if (!bestTrain) continue;
+
+        const [, pathDepart, pathArrive, , routeCode, manStation] = bestTrain;
+        const pathRide = pathArrive - pathDepart;
+        const connKey = pathConnMap[manStation];
+        const conn = bestConnection(connKey);
         const toSoHo = conn.minutes;
-        const total = waitLyft + dmToPath + avgWait + pathRide + toSoHo;
+        const waitAtPlatform = pathDepart - arriveAtStation; // actual wait
+        const total = waitLyft + dmToPath + waitAtPlatform + pathRide + toSoHo;
         const lyftCost = lyftEst(rdToPath, tf.mult, 1.0, 'intra_nj');
         const totalCost = lyftCost.mid + PATH_FARE + (conn.fare || 0);
         const score = total * 0.35 + totalCost * 0.65;
+
         if (score < bestScore) {
           bestScore = score;
+          const pathDepartFmt = fmt12(minToHHMM(pathDepart));
+          const manStationName = PATH_MANHATTAN_STATIONS[manStation]?.n || manStation;
+          const connLabel = pathConnLabels[connKey] ? pathConnLabels[connKey](conn.label) : conn.label;
           bestRoute = {
             label: 'Lyft + PATH',
             mode: 'path',
@@ -1256,18 +1314,18 @@ function buildReturnRoutes(place, dateStr, earliestLeaveMin) {
             arriveHomeMin: earliestLeaveMin + total,
             legs: [
               { type: 'wait', label: 'Wait for Lyft', detail: `At ${place.name}`, minutes: waitLyft },
-              { type: 'drive', label: `Lyft to ${stop.name}`, detail: `${rdToPath.toFixed(1)} mi`, minutes: dmToPath },
-              { type: 'wait', label: `Wait for PATH (every ${pf} min)`, detail: 'Platform', minutes: avgWait },
-              { type: 'train', label: `PATH to ${line.manhattanStation === 'wtcPath' ? 'WTC' : '33rd St'}`, detail: `${lineId} · $${PATH_FARE.toFixed(2)}`, minutes: pathRide },
-              { type: conn.type === 'subway' ? 'train' : 'walk', label: `${conn.label.replace('to WTC-Cortlandt','from WTC').replace('to 34th St-Penn','from 33rd St').replace('to Christopher','from Christopher')}`, detail: conn.trains || 'To 543 Broadway', minutes: toSoHo },
+              { type: 'drive', label: `Lyft to ${stn.n}`, detail: `${rdToPath.toFixed(1)} mi`, minutes: dmToPath },
+              { type: 'wait', label: `Catch ${pathDepartFmt} PATH`, detail: `${routeCode} line · ${stn.n}`, minutes: Math.max(1, waitAtPlatform) },
+              { type: 'train', label: `PATH to ${manStationName}`, detail: `${routeCode} · $${PATH_FARE.toFixed(2)}`, minutes: pathRide },
+              { type: conn.type === 'subway' ? 'train' : 'walk', label: connLabel, detail: conn.trains || 'To 543 Broadway', minutes: toSoHo },
             ],
-            notes: `Lyft to ${stop.name}, PATH to Manhattan`,
-            _station: stop.name, _dist: rdToPath,
+            notes: `Lyft to ${stn.n}, ${pathDepartFmt} PATH to ${manStationName} (${routeCode})`,
+            _station: stn.n, _dist: rdToPath,
           };
         }
       }
+      results.pathRoute = bestRoute;
     }
-    results.pathRoute = bestRoute;
   }
 
   return results;
