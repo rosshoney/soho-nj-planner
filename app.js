@@ -240,7 +240,8 @@ function buildRoutes(dest, arrTime, dateStr) {
         const conn = bestConnection(connKey);
         const waitAtPlatform = 3; // buffer
         const leaveTime = pathDepart - conn.minutes - waitAtPlatform;
-        const actualTotal = arrMin - leaveTime;
+        const pathActualArrival = pathArrive + lm.minutes;
+        const actualTotal = pathActualArrival - leaveTime;
         const transitCost = (conn.fare || 0) + PATH_FARE;
         const totalCostMid = transitCost + lm.cost.mid;
         const rd = roadMiles(stn.lat, stn.lng, dest.lat, dest.lng);
@@ -257,6 +258,7 @@ function buildRoutes(dest, arrTime, dateStr) {
           bestRoute = {
             id: "path-route", label: rd > WALK_THRESHOLD ? "PATH + Lyft" : "PATH Train",
             mode: "path", departTime: minToHHMM(leaveTime < 0 ? leaveTime + 1440 : leaveTime), totalMin: actualTotal,
+            actualArrival: minToHHMM(pathActualArrival % 1440),
             cost: { low: Math.round((transitCost + lm.cost.low) * 100) / 100, mid: Math.round(totalCostMid * 100) / 100, high: Math.round((transitCost + lm.cost.high) * 100) / 100 },
             traffic: { level: "low", label: "Fixed schedule" },
             legs: [
@@ -316,7 +318,8 @@ function buildRoutes(dest, arrTime, dateStr) {
       const rideMin = trainArrive - trainDepart;
       const leaveTime = trainDepart - 18; // 15 min subway + 3 min buffer
       const waitAtPenn = 3; // buffer
-      const actualTotal = arrMin - leaveTime;
+      const actualArrivalMin = trainArrive + lm.minutes;
+      const actualTotal = actualArrivalMin - leaveTime;
       const departHHMM = minToHHMM(leaveTime < 0 ? leaveTime + 1440 : leaveTime);
       const trainDepartFmt = fmt12(minToHHMM(trainDepart));
       const trainArriveFmt = fmt12(minToHHMM(trainArrive));
@@ -329,6 +332,7 @@ function buildRoutes(dest, arrTime, dateStr) {
         bestRoute3 = {
           id: "njt-route", label: rd > WALK_THRESHOLD ? "NJ Transit + Lyft" : "NJ Transit",
           mode: "njtransit", departTime: departHHMM, totalMin: actualTotal,
+          actualArrival: minToHHMM(actualArrivalMin % 1440),
           cost: { low: Math.round((transitCost + lm.cost.low) * 100) / 100, mid: Math.round((transitCost + lm.cost.mid) * 100) / 100, high: Math.round((transitCost + lm.cost.high) * 100) / 100 },
           traffic: { level: "low", label: "Fixed schedule" },
           legs: [
@@ -360,7 +364,8 @@ function buildRoutes(dest, arrTime, dateStr) {
       const rideMin = trainArrive - trainDepart;
       const leaveTime = trainDepart - 18;
       const waitAtPenn = 3;
-      const actualTotal = arrMin - leaveTime;
+      const actualArrivalMin4 = trainArrive + walkMin;
+      const actualTotal = actualArrivalMin4 - leaveTime;
       const departHHMM = minToHHMM(leaveTime < 0 ? leaveTime + 1440 : leaveTime);
       const trainDepartFmt = fmt12(minToHHMM(trainDepart));
       const trainArriveFmt = fmt12(minToHHMM(trainArrive));
@@ -371,6 +376,7 @@ function buildRoutes(dest, arrTime, dateStr) {
         bestRoute4 = {
           id: "njt-walk-route", label: "NJ Transit Only",
           mode: "njtransit", departTime: departHHMM, totalMin: actualTotal,
+          actualArrival: minToHHMM(actualArrivalMin4 % 1440),
           cost: { low: Math.round(transitCost * 100) / 100, mid: Math.round(transitCost * 100) / 100, high: Math.round(transitCost * 100) / 100 },
           traffic: { level: "low", label: "Fixed schedule" },
           legs: [
@@ -797,14 +803,14 @@ function showDetail(r, all, dest, arrTime) {
 
   detailContent.innerHTML = `
     <h2 class="detail-title">${r.label} → ${dest.name}</h2>
-    <p class="detail-subtitle">Arrive by ${fmt12(arrTime)} · Leave by <strong>${fmt12(r.departTime)}</strong></p>
+    <p class="detail-subtitle">Arrive ${r.actualArrival ? fmt12(r.actualArrival) : 'by ' + fmt12(arrTime)} · Leave by <strong>${fmt12(r.departTime)}</strong></p>
     <div class="detail-grid">
       <div class="detail-block">
         <h3>Route legs</h3>
         <div class="timeline">${r.legs.map(l => `
           <div class="timeline-step"><div class="timeline-dot" data-type="${l.type}"></div><div class="timeline-content"><strong>${l.label}</strong><span class="tl-detail">${l.detail}</span><span class="tl-time">${l.minutes} min</span></div></div>
         `).join("")}
-          <div class="timeline-step"><div class="timeline-dot" data-type="arrive"></div><div class="timeline-content"><strong>Arrive at ${dest.name}</strong><span class="tl-time">${fmt12(arrTime)}</span></div></div>
+          <div class="timeline-step"><div class="timeline-dot" data-type="arrive"></div><div class="timeline-content"><strong>Arrive at ${dest.name}</strong><span class="tl-time">${fmt12(r.actualArrival || arrTime)}</span></div></div>
         </div>
       </div>
       <div class="detail-block">
